@@ -1,5 +1,4 @@
 import os
-import json
 import pandas as pd
 import openai
 from azure.search.documents import SearchClient
@@ -7,7 +6,7 @@ from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.models import VectorizedQuery
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents.indexes.models import (
-    SearchIndex, SimpleField, SearchField, SearchFieldDataType,
+    SearchIndex, SimpleField, SearchableField, SearchFieldDataType,SearchField,
     VectorSearch, HnswAlgorithmConfiguration, HnswParameters, VectorSearchProfile
 )
 from dotenv import load_dotenv
@@ -20,11 +19,6 @@ AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_SEARCH_API_KEY = os.getenv("AZURE_SEARCH_API_KEY")
 AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
 AZURE_SEARCH_INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME")
-
-# OpenAI API クライアント設定
-openai.api_key = AZURE_OPENAI_API_KEY
-openai.api_base = AZURE_OPENAI_ENDPOINT
-openai.api_version = "2023-07-01-preview"
 
 # Azure AI Search クライアント設定
 search_client = SearchClient(
@@ -45,16 +39,17 @@ def create_index():
     index = SearchIndex(
         name=AZURE_SEARCH_INDEX_NAME,
         fields=[
-            SimpleField(name="id", type=SearchFieldDataType.String, key=True),
-            SearchField(name="json_data", type=SearchFieldDataType.String, searchable=True),
-            SearchField(
-                name="vector",
-                type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
-                searchable=True,
-                filterable=False,
-                dimensions=3072,  # text-embedding-3-large の次元数
-                vector_search_configuration="my-vector-config"
-            )
+            SimpleField(name="id", type=SearchFieldDataType.String, key=True, sortable=True),
+            SearchableField(name="name", type=SearchFieldDataType.String, analyzer="ja.microsoft", searchable=True),
+            SearchableField(name="birth_date", type=SearchFieldDataType.String, searchable=True),
+            SearchableField(name="education", type=SearchFieldDataType.String, searchable=True),
+            SearchableField(name="research_field", type=SearchFieldDataType.String, searchable=True),
+            SearchableField(name="research_achievements", type=SearchFieldDataType.String, searchable=True),
+            SearchableField(name="awards", type=SearchFieldDataType.String, searchable=True),
+            SearchableField(name="self_intro", type=SearchFieldDataType.String, searchable=True),
+            SearchableField(name="appeal", type=SearchFieldDataType.String, searchable=True),
+            SearchField(name="vector", type=SearchFieldDataType.Collection(SearchFieldDataType.Single), 
+                        vector_search_dimensions=3072, vector_search_profile_name="vector_profile")
         ],
         vector_search=VectorSearch(
             algorithms=[
@@ -70,7 +65,7 @@ def create_index():
             ],
             profiles=[
                 VectorSearchProfile(
-                    name="my-vector-profile",
+                    name="vector_profile",
                     algorithm_configuration_name="my-hnsw-config"
                 )
             ]
@@ -79,6 +74,14 @@ def create_index():
     
     index_client.create_or_update_index(index)
     print(f"インデックス '{AZURE_SEARCH_INDEX_NAME}' を作成しました！")
+
+# インデックス作成を実行
+create_index()
+
+# OpenAI API クライアント設定
+openai.api_key = AZURE_OPENAI_API_KEY
+openai.api_base = AZURE_OPENAI_ENDPOINT
+openai.api_version = "2023-07-01-preview"
 
 # CSVデータの読み込み
 df = pd.read_csv("researchers.csv")
@@ -93,33 +96,24 @@ def get_embedding(text):
 
 # 研究者データをAzure AI Searchに登録
 documents = []
-for idx, (_, row) in enumerate(df.iterrows(), start=1):
-    # JSONデータ作成
-    researcher_data = {
-        "氏名": row["氏名"],
-        "生年月日": row["生年月日"],
-        "学歴": row["学歴"],
-        "研究分野": row["研究分野"],
-        "研究実績": row["研究実績"],
-        "表彰実績": row["表彰実績"],
-        "自己紹介": row["自己紹介"],
-        "アピール": row["アピール"]
-    }
-    researcher_json = json.dumps(researcher_data, ensure_ascii=False)
-    
+for idx, row in df.iterrows():
     # 埋め込み取得
-    embedding = get_embedding(researcher_json)
+    embedding = get_embedding(row["氏名"] + " " + row["研究分野"] + " " + row["研究実績"])
     
     # Azure AI Search 用のドキュメント作成
     document = {
-        "id": str(idx),  # 連番をIDとして使用
-        "json_data": researcher_json,
+        "id": str(idx + 1),  # 連番をIDとして使用
+        "name": row["氏名"],
+        "birth_date": row["生年月日"],
+        "education": row["学歴"],
+        "research_field": row["研究分野"],
+        "research_achievements": row["研究実績"],
+        "awards": row["表彰実績"],
+        "self_intro": row["自己紹介"],
+        "appeal": row["アピール"],
         "vector": embedding  # 埋め込みベクトル
     }
     documents.append(document)
-
-# インデックス作成を実行
-create_index()
 
 # インデックスにデータをアップロード
 print("データアップロード開始")
